@@ -47,7 +47,7 @@ def leer_labels_kitti(ruta, estructura = 1, idImagen=0):
                 if estructura ==1:
                     etiqueta = {
                         'linea': linea.strip(),
-                        'clase': datos[0].lower(),  # Tipo de objeto (ej. 'car', 'pedestrian', etc.)
+                        'clase': datos[2].lower(),  # Tipo de objeto (ej. 'car', 'pedestrian', etc.)
                         'tx': float(datos[11]),  # Coordenada X del centro del objeto
                         'ty': float(datos[12]),  # Coordenada Y del centro del objeto
                         'tz': float(datos[13]),  # Coordenada Z del centro del objeto
@@ -60,6 +60,7 @@ def leer_labels_kitti(ruta, estructura = 1, idImagen=0):
                 elif estructura ==2 and int(datos[0]) == idImagen:
                     etiqueta = {
                         'linea': linea.strip(),
+                        'id': datos[1].lower(),
                         'clase': datos[2].lower(),  # Tipo de objeto (ej. 'car', 'pedestrian', etc.)
                         'tx': float(datos[13]),  # Coordenada X del centro del objeto
                         'ty': float(datos[14]),  # Coordenada Y del centro del objeto
@@ -439,6 +440,81 @@ def asociar_estimaciones_con_labels(x, y, z, etiquetas, contador, diccionario, i
                 #print(f"id={idx} con línea: {etiqueta['linea']}"
                 #etiquetas.remove(etiqueta)
 
+def asociar_estimaciones_con_labels2(x, y, z, etiquetas, contador, diccionario, idImagen, puntos_recortados ):
+    """
+    Asocia las estimaciones (x, y, z) con las líneas del archivo KITTI comparando posiciones.
+    Imprime las asociaciones id= id con línea correspondiente y guarda los resultados en un diccionario.
+
+    Parametros:
+    - x, y, z: Coordenadas de la estimación a asociar (pueden ser escalares o listas).
+    - etiquetas: Lista de etiquetas leídas del archivo KITTI.
+    - clase: El nombre de la clase (ej. 'Car', 'Pedestrian', etc.).
+    - diccionario: Diccionario donde se guardarán las asociaciones.
+    - idImagen: Identificador de la imagen (ej. '000013').
+    """
+    # Asegurarse de que x, y, z sean listas o arrays
+    x = np.atleast_1d(x)
+    y = np.atleast_1d(y)
+    z = np.atleast_1d(z)
+    
+    usadas = set()  # Para no repetir asociaciones
+    identificador = None
+    for idx, (coord_x, coord_y, coord_z) in enumerate(zip(x, y, z)):
+        mejor_match = None
+        menor_distancia = float('inf')
+        for i, etiqueta in enumerate(etiquetas):
+            if i in usadas:
+                continue
+            # Calcular distancia euclidiana entre estimaciones y etiquetas
+            distancia = np.sqrt((coord_x - etiqueta['tz'])**2 +
+                                (coord_y + etiqueta['tx'])**2 + # Y con signo invertido
+                                (coord_z - etiqueta['ty'])**2)  
+            if distancia < menor_distancia:
+                mejor_match = (i, etiqueta)
+                menor_distancia = distancia
+
+        if mejor_match:
+            #verificar que la asociacion no difiera mas de 10 metros 
+            if menor_distancia > 10:
+                print("No se ha encontrado asociacion posible para este objeto")
+            else:
+            
+                usadas.add(mejor_match[0])
+                etiqueta = mejor_match[1]
+                identificador = etiqueta["id"]
+                # Crear el punto para almacenar en el diccionario
+                puntos = np.array([coord_x, coord_y, coord_z])
+                
+                # Formato esperado para la etiqueta 
+                etiqueta_label = {
+                    "class": etiqueta['clase'],  # Tipo de objeto (ej. 'Car')
+                    "x": etiqueta['tx'],  # Coordenada X del centro del objeto
+                    "y": etiqueta['ty'],  # Coordenada Y del centro del objeto
+                    "z": etiqueta['tz'],  # Coordenada Z del centro del objeto
+                    "length": etiqueta['length'],  # Longitud del objeto en metros
+                    "height": etiqueta['height'],  # Altura del objeto en metros
+                    "width": etiqueta['width'],  # Ancho del objeto en metros
+                    "rot_y": etiqueta['rot_y']  # Rotación del objeto en Y
+                }
+                
+                # Guardar en el diccionario
+                if idImagen not in diccionario:
+                    diccionario[idImagen] = {}
+
+                if contador not in diccionario[idImagen]:
+                    diccionario[idImagen][contador] = {
+                        "points": [],
+                        "label": {}
+                    }
+
+                diccionario[idImagen][contador]["points"] = puntos_recortados
+                diccionario[idImagen][contador]["label"] = etiqueta_label
+                etiqueta_usada = etiqueta
+                # Imprimir la asociación
+                #print(f"id={idx} con línea: {etiqueta['linea']}"
+                #etiquetas.remove(etiqueta)
+    return identificador
+
 def eliminar_asociaciones_duplicadas(diccionario, diccionario_centros, idImagen):
     # Lista de objetos a eliminar (duplicados)
     eliminados = []
@@ -727,7 +803,137 @@ def inferencia(imagen, idImagen, ruta_label, ruta_lidar, diccionario, ruta_calib
     if info ==1: visualizar_puntos_3d(todos_los_puntos, titulo="Todos los Objetos Detectados en el Espacio 3D")
     if info ==1: visualizar_puntos_filtrados(todos_los_puntos)
     #print(diccionario_centros)
+    #diccionario = eliminar_asociaciones_duplicadas(diccionario, diccionario_centros, idImagen)
+    return diccionario
+
+def inferencia2(imagen, idImagen, ruta_label, ruta_lidar, diccionario, ruta_calibracion, guardarImagenes = False, info=0, estrcuturaLabel =1):
+    
+    # Cargar el modelo YOLOv8
+    model = YOLO('yolov8n.pt')
+
+    todos_los_puntos = []
+    etiquetas = leer_labels_kitti(ruta_label, estrcuturaLabel, int(idImagen))
+    diccionario_centros= {}
+    datos_imagen = {}
+    # Verificar si la imagen se cargó correctamente
+    if imagen is None:
+        print("Error: no se pudo cargar la imagen. Verifica la ruta del archivo.")
+    else:
+        print(f"\n Procesando imagen: {idImagen}")
+        # Detectar objetos en la imagen
+        results = model.predict(imagen)
+
+        # Leer los puntos LiDAR del archivo
+        puntos_lidar = leer_puntos_lidar(ruta_lidar)
+
+        
+
+        # Leer las matrices de calibración
+        P2, R0_rect, Tr_velo_to_cam = leer_matrices_calibracion(ruta_calibracion)
+
+        # Procesar cada bounding box detectado por YOLO
+        contador = 0
+        for r in results:
+            for box in r.boxes:
+                # Obtener la clase y coordenadas del bounding box
+                clase = r.names[int(box.cls.item())]
+                x_min, y_min, x_max, y_max = box.xyxy[0].cpu().numpy()
+
+                # Estimar el centro 3D del bounding box usando los puntos LiDAR
+     
+                centro_3d, puntos = encontrar_centro_bounding_box_y_nube(
+                    puntos_lidar, [x_min, y_min, x_max, y_max], P2, R0_rect, Tr_velo_to_cam
+                )
+                if info ==1: print(f"clase= {clase}, id= {contador}, X= {centro_3d[0]}, Y= {centro_3d[1]}, Z={centro_3d[2]} ")
+
+                if centro_3d is None or puntos is None:
+                    if info ==1 : print(f"No se encontraron puntos para el bounding box de la clase {clase}. Saltando a la siguiente iteración.")
+                    continue
+
+                if centro_3d is not None:
+                    # Proyectar el centro 3D a la imagen 2D
+                    u, v = proyectar_punto_3d_a_2d(centro_3d, P2, R0_rect, Tr_velo_to_cam)
+                    
+                    # Dibujar el bounding box y el centro proyectado en la imagen
+                    cv2.rectangle(imagen, (int(x_min), int(y_min)), (int(x_max), int(y_max)), (0, 255, 0), 2)
+                    cv2.circle(imagen, (int(u), int(v)), 5, (255, 0, 0), -1)
+                    distancia = np.linalg.norm(centro_3d)
+                    #cv2.putText(imagen, f"{clase} Dist: {distancia:.2f}m id: {contador}", (int(x_min), int(y_min - 10)), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 255, 0), 2)
+                    #cv2.putText(imagen, f" id: {contador}", (int(x_min), int(y_min - 10)), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 255, 0), 2)
+                    datos_imagen[contador]={}
+                    datos_imagen[contador]["x_min"] = x_min
+                    datos_imagen[contador]["y_min"] = y_min
+                # Si hay puntos asociados, aplicar clustering y filtrado
+                if centro_3d is not None and len(puntos) > 0:
+                    # Aplicar DBSCAN para detectar el cluster más cercano al centro del bounding box
+                    puntos_cluster_cercano = cluster_mas_cercano(
+                        puntos, centro_bb=(centro_3d[0], centro_3d[1]), eps=0.6, min_samples=5
+                    )
+                    #puntos_cluster_cercano=puntos
+                    if len(puntos_cluster_cercano) > 0:
+                        puntos_recortados = puntos_cluster_cercano
+                        if len(puntos_recortados) > 0:
+                            # Agregar los puntos recortados del objeto actual a la lista global
+                            todos_los_puntos.append(puntos_recortados)
+                    
+                    # Visualizar los puntos filtrados y recortados
+                    if info ==1: visualizar_puntos_3d(puntos_recortados, titulo=f"Clase: {clase} (id: {contador})")
+                    
+                    # Asociar las estimaciones con las etiquetas
+                    identifiador = asociar_estimaciones_con_labels2(centro_3d[0], centro_3d[1], centro_3d[2], etiquetas, contador, diccionario, idImagen, puntos_recortados)
+                    datos_imagen[contador]["id"] = identifiador
+                    diccionario_centros[contador] = {
+                        'x':float(centro_3d[0]), 'y':float(centro_3d[1]), 'z':float(centro_3d[2])
+                    }
+                    #print(diccionario[idImagen][contador]['label'])
+                contador += 1
+
+        # Guardar el diccionario actualizado en el archivo
+        #with open(ruta_diccionario, 'wb') as file:
+        #    pickle.dump(diccionario, file)
+
+        # Mostrar la imagen con los bounding boxes y los centros proyectados
+        if (info == 1 or info) == 2: mostrar_imagen(imagen)
+        
+    # Combinar todos los puntos en un único array
+    todos_los_puntos = np.vstack(todos_los_puntos) if len(todos_los_puntos) > 0 else np.array([])
+
+    # Visualizar todos los puntos en un único espacio 3D
+    if info ==1: visualizar_puntos_3d(todos_los_puntos, titulo="Todos los Objetos Detectados en el Espacio 3D")
+    if info ==1: visualizar_puntos_filtrados(todos_los_puntos)
+    #print(diccionario_centros)
+    #print(diccionario)
     diccionario = eliminar_asociaciones_duplicadas(diccionario, diccionario_centros, idImagen)
+    # pintar los id en la imagen
+    # for elemento in diccionario[idImagen]:
+    #     for elem in datos_imagen:
+    #         if elemento == elem:
+    #             cv2.putText(imagen, f" id: {datos_imagen[elem]["id"]}", (int(datos_imagen[elem]["x_min"]), int(datos_imagen[elem]["y_min"] - 10)), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 255, 0), 2)
+    #             diccionario[idImagen][datos_imagen[elem]["id"]] = diccionario[idImagen].pop(elemento)
+    # Crear un diccionario auxiliar para almacenar los cambios
+    cambios = {}
+    print(datos_imagen)
+    for elemento in list(diccionario[idImagen]):  # Usar list() para evitar modificar el diccionario durante la iteración
+        for elem in datos_imagen:
+            if elemento == elem:
+                print(datos_imagen[elem]['id'])
+                cv2.putText(
+                    imagen,
+                    f" id: {datos_imagen[elem]['id']}",
+                    (int(datos_imagen[elem]["x_min"]), int(datos_imagen[elem]["y_min"] - 10)),
+                    cv2.FONT_HERSHEY_SIMPLEX,
+                    0.5,
+                    (0, 255, 0),
+                    2
+                )
+                cambios[datos_imagen[elem]["id"]] = diccionario[idImagen][elemento]
+
+    # Aplicar los cambios después de la iteración
+    for old_key in cambios:
+        diccionario[idImagen][old_key] = cambios[old_key]
+        diccionario[idImagen].pop(old_key, None)  # Eliminar la clave antigua si existe
+    if guardarImagenes: guardar_imagenes_procesadas(imagen,idImagen)
+    
     return diccionario
 
 
