@@ -916,7 +916,7 @@ def inferencia2(imagen, idImagen, ruta_label, ruta_lidar, diccionario, ruta_cali
     for elemento in list(diccionario[idImagen]):  # Usar list() para evitar modificar el diccionario durante la iteración
         for elem in datos_imagen:
             if elemento == elem:
-                print(datos_imagen[elem]['id'])
+                #print(datos_imagen[elem]['id'])
                 cv2.putText(
                     imagen,
                     f" id: {datos_imagen[elem]['id']}",
@@ -929,10 +929,8 @@ def inferencia2(imagen, idImagen, ruta_label, ruta_lidar, diccionario, ruta_cali
                 cambios[datos_imagen[elem]["id"]] = diccionario[idImagen][elemento]
 
     # Aplicar los cambios después de la iteración
-    for old_key in cambios:
-        diccionario[idImagen][old_key] = cambios[old_key]
-        diccionario[idImagen].pop(old_key, None)  # Eliminar la clave antigua si existe
-    if guardarImagenes: guardar_imagenes_procesadas(imagen,idImagen)
+    diccionario[idImagen].clear()
+    diccionario[idImagen].update(cambios)
     
     return diccionario
 
