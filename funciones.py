@@ -576,13 +576,11 @@ def eliminar_asociaciones_duplicadas(diccionario, diccionario_centros, idImagen)
             eliminados.append(mejor_clase_id)
     """
         
-        
-        
+
     # Eliminar los duplicados después de terminar la comparación
     for clase_id in eliminados:
         if clase_id in diccionario[idImagen]:
             del diccionario[idImagen][clase_id]
-
     return diccionario
 
 
@@ -914,9 +912,11 @@ def inferencia2(imagen, idImagen, ruta_label, ruta_lidar, diccionario, ruta_cali
     cambios = {}
     #print(datos_imagen)
     for elemento in list(diccionario[idImagen]):  # Usar list() para evitar modificar el diccionario durante la iteración
+        print(f"elemento= {elemento}")
         for elem in datos_imagen:
-            if elemento == elem:
-                #print(datos_imagen[elem]['id'])
+            #print(f"toca= {elem}")
+            if int(elemento) == int(elem):
+                print(f"elem= {elem} y elemento = {elemento}")
                 cv2.putText(
                     imagen,
                     f" id: {datos_imagen[elem]['id']}",
@@ -926,7 +926,7 @@ def inferencia2(imagen, idImagen, ruta_label, ruta_lidar, diccionario, ruta_cali
                     (0, 255, 0),
                     2
                 )
-                cambios[datos_imagen[elem]["id"]] = diccionario[idImagen][elemento]
+                cambios[datos_imagen[elem]["id"]] = diccionario[idImagen].get(str(elem))
 
     # Aplicar los cambios después de la iteración
     diccionario[idImagen].clear()
