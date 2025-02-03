@@ -523,8 +523,8 @@ def eliminar_asociaciones_duplicadas(diccionario, diccionario_centros, idImagen)
     for clase_id, datos in diccionario[idImagen].items():
         # Obtener las coordenadas del centro del objeto (x, y, z) del diccionario
         x_obj, y_obj, z_obj = datos['label']['x'], datos['label']['y'], datos['label']['z']
-
-        centro_obj = diccionario_centros.get(clase_id)
+        
+        centro_obj = diccionario_centros.get(int(clase_id))
         distancia = ((centro_obj['x'] - z_obj)**2 + (centro_obj['y'] - (-x_obj))**2 + (-centro_obj['z'] - y_obj)**2)**0.5
         # si la distancia es muy grande descartamos
         if distancia > 4: eliminados.append(clase_id)
@@ -912,7 +912,7 @@ def inferencia2(imagen, idImagen, ruta_label, ruta_lidar, diccionario, ruta_cali
     #             diccionario[idImagen][datos_imagen[elem]["id"]] = diccionario[idImagen].pop(elemento)
     # Crear un diccionario auxiliar para almacenar los cambios
     cambios = {}
-    print(datos_imagen)
+    #print(datos_imagen)
     for elemento in list(diccionario[idImagen]):  # Usar list() para evitar modificar el diccionario durante la iteración
         for elem in datos_imagen:
             if elemento == elem:
@@ -931,7 +931,7 @@ def inferencia2(imagen, idImagen, ruta_label, ruta_lidar, diccionario, ruta_cali
     # Aplicar los cambios después de la iteración
     diccionario[idImagen].clear()
     diccionario[idImagen].update(cambios)
-    
+    if guardarImagenes: guardar_imagenes_procesadas(imagen,idImagen)
     return diccionario
 
 
