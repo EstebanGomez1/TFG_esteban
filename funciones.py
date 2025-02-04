@@ -527,13 +527,13 @@ def eliminar_asociaciones_duplicadas(diccionario, diccionario_centros, idImagen)
         centro_obj = diccionario_centros.get(int(clase_id))
         distancia = ((centro_obj['x'] - z_obj)**2 + (centro_obj['y'] - (-x_obj))**2 + (-centro_obj['z'] - y_obj)**2)**0.5
         # si la distancia es muy grande descartamos
-        if distancia > 4: eliminados.append(clase_id)
-
+        #if distancia > 5: eliminados.append(clase_id)
 
         # Recorrer el diccionario otra vez para encontrar duplicados
         for clase_id2, datos2 in diccionario[idImagen].items():
             # Comprobar que no estamos comparando el mismo objeto
-            if clase_id != clase_id2:
+
+            if int(clase_id) != int(clase_id2):
   
                 # Obtener las coordenadas del centro del objeto (x, y, z) del segundo objeto
                 x_obj2, y_obj2, z_obj2 = datos2['label']['x'], datos2['label']['y'], datos2['label']['z']
@@ -541,7 +541,6 @@ def eliminar_asociaciones_duplicadas(diccionario, diccionario_centros, idImagen)
 
                 # Comparar si las coordenadas son exactamente iguales (==)
                 if x_obj == x_obj2 and y_obj == y_obj2 and z_obj == z_obj2:
-  
                     
                     centro_obj2 = diccionario_centros.get(clase_id2)
 
@@ -555,33 +554,23 @@ def eliminar_asociaciones_duplicadas(diccionario, diccionario_centros, idImagen)
                     
                     if distancia > distancia2:
                         #candidatos[clase_id][clase_id]= distancia
+                        distancia = distancia2
                         eliminados.append(clase_id)
                     else:
                         #candidatos[clase_id][clase_id2] = distancia2
                         eliminados.append(clase_id2)
 
 
-    # escoger el mejor candidato
-    """
-    for clase_id, subcandidatos in candidatos.items():
-        mejor = float('inf')  # Inicia con un valor alto
-        mejor_clase_id = None
-
-        for clase_id2, distancia in subcandidatos.items():
-            if distancia < mejor:
-                mejor = distancia
-                mejor_clase_id = clase_id2
-
-        if mejor_clase_id:
-            eliminados.append(mejor_clase_id)
-    """
-        
-
+    print("==================")
+    print(diccionario)
     # Eliminar los duplicados después de terminar la comparación
     for clase_id in eliminados:
         if clase_id in diccionario[idImagen]:
             del diccionario[idImagen][clase_id]
+    print("===================")
+    print(diccionario)
     return diccionario
+
 
 
 
@@ -853,14 +842,18 @@ def inferencia2(imagen, idImagen, ruta_label, ruta_lidar, diccionario, ruta_cali
                     u, v = proyectar_punto_3d_a_2d(centro_3d, P2, R0_rect, Tr_velo_to_cam)
                     
                     # Dibujar el bounding box y el centro proyectado en la imagen
-                    cv2.rectangle(imagen, (int(x_min), int(y_min)), (int(x_max), int(y_max)), (0, 255, 0), 2)
-                    cv2.circle(imagen, (int(u), int(v)), 5, (255, 0, 0), -1)
-                    distancia = np.linalg.norm(centro_3d)
+                    #cv2.rectangle(imagen, (int(x_min), int(y_min)), (int(x_max), int(y_max)), (0, 255, 0), 2)
+                    #cv2.circle(imagen, (int(u), int(v)), 5, (255, 0, 0), -1)
+                    #distancia = np.linalg.norm(centro_3d)
                     #cv2.putText(imagen, f"{clase} Dist: {distancia:.2f}m id: {contador}", (int(x_min), int(y_min - 10)), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 255, 0), 2)
                     #cv2.putText(imagen, f" id: {contador}", (int(x_min), int(y_min - 10)), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 255, 0), 2)
                     datos_imagen[contador]={}
                     datos_imagen[contador]["x_min"] = x_min
+                    datos_imagen[contador]["x_max"] = x_max
                     datos_imagen[contador]["y_min"] = y_min
+                    datos_imagen[contador]["y_max"] = y_max
+                    datos_imagen[contador]["u"] = u
+                    datos_imagen[contador]["v"] = v
                 # Si hay puntos asociados, aplicar clustering y filtrado
                 if centro_3d is not None and len(puntos) > 0:
                     # Aplicar DBSCAN para detectar el cluster más cercano al centro del bounding box
@@ -912,11 +905,11 @@ def inferencia2(imagen, idImagen, ruta_label, ruta_lidar, diccionario, ruta_cali
     cambios = {}
     #print(datos_imagen)
     for elemento in list(diccionario[idImagen]):  # Usar list() para evitar modificar el diccionario durante la iteración
-        print(f"elemento= {elemento}")
+        #print(f"elemento= {elemento}")
         for elem in datos_imagen:
             #print(f"toca= {elem}")
             if int(elemento) == int(elem):
-                print(f"elem= {elem} y elemento = {elemento}")
+                #print(f"elem= {elem} y elemento = {elemento}")
                 cv2.putText(
                     imagen,
                     f" id: {datos_imagen[elem]['id']}",
@@ -926,15 +919,17 @@ def inferencia2(imagen, idImagen, ruta_label, ruta_lidar, diccionario, ruta_cali
                     (0, 255, 0),
                     2
                 )
-                cambios[datos_imagen[elem]["id"]] = diccionario[idImagen].get(str(elem))
+                # Dibujar el bounding box y el centro proyectado en la imagen
+                cv2.rectangle(imagen, (int(datos_imagen[elem]["x_min"]), int(datos_imagen[elem]["y_min"])), (int(datos_imagen[elem]["x_max"]), int(datos_imagen[elem]["y_max"])), (0, 255, 0), 2)
+                cv2.circle(imagen, (int(datos_imagen[elem]["u"]), int(datos_imagen[elem]["v"])), 5, (255, 0, 0), -1)
+                cambios[datos_imagen[elem]["id"]] = diccionario[idImagen][elem]
 
     # Aplicar los cambios después de la iteración
     diccionario[idImagen].clear()
     diccionario[idImagen].update(cambios)
+    #print(diccionario)
     if guardarImagenes: guardar_imagenes_procesadas(imagen,idImagen)
     return diccionario
-
-
 
 
 
