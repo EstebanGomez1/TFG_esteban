@@ -475,7 +475,7 @@ def asociar_estimaciones_con_labels2(x, y, z, etiquetas, contador, diccionario, 
 
         if mejor_match:
             #verificar que la asociacion no difiera mas de 10 metros 
-            if menor_distancia > 10:
+            if menor_distancia > 6:
                 print("No se ha encontrado asociacion posible para este objeto")
             else:
             
@@ -561,14 +561,14 @@ def eliminar_asociaciones_duplicadas(diccionario, diccionario_centros, idImagen)
                         eliminados.append(clase_id2)
 
 
-    print("==================")
-    print(diccionario)
+    #print("==================")
+    #print(diccionario)
     # Eliminar los duplicados después de terminar la comparación
     for clase_id in eliminados:
         if clase_id in diccionario[idImagen]:
             del diccionario[idImagen][clase_id]
-    print("===================")
-    print(diccionario)
+    #print("===================")
+    #print(diccionario)
     return diccionario
 
 
