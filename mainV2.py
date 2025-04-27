@@ -1,15 +1,17 @@
 import cv2
 import numpy as np
 import pickle
-import funciones
+import funciones2
 from ultralytics import YOLO
 import os
+from tqdm import tqdm
+import time
 
 # Definicion de rutas
 
 idImagen = "000000"
-idSeccion = "0000"
-ruta_kitti = '/media/esteban/DISCO EXT/TFG'
+idSeccion = "0003"
+ruta_kitti = 'datos'
 
 ruta_imagen = f'{ruta_kitti}/imagenes/{idSeccion}/{idImagen}.png'
 ruta_lidar = f'{ruta_kitti}/velodyne/{idSeccion}/{idImagen}.bin'
@@ -30,11 +32,11 @@ except FileNotFoundError:
 
 
 # Definir el rango de idImagen desde "000000" hasta "000010" (puedes cambiar el valor de x)
-start_id = 2  # Representa 000000
-end_id = 2  # Representa 000700
+start_id = 0  # Representa 000000
+end_id = 3  # Representa 000700
 
 # Bucle para recorrer el rango de idImagen
-for i in range(start_id, end_id + 1):
+for i in tqdm(range(start_id, end_id + 1)):
     # Formatear idImagen con ceros a la izquierda
     idImagen = f"{i:06d}"  # Esto genera "000000", "000001", ..., "000010"
 
@@ -50,7 +52,7 @@ for i in range(start_id, end_id + 1):
         imagen = cv2.imread(ruta_imagen)
         
         # Llamar a la función de inferencia
-        diccionario = funciones.inferencia2(imagen, idImagen, ruta_label, ruta_lidar, diccionario, ruta_calibracion, True, 0, 2) #Con 0 no info, 1 toda info, 2 info imagenes ; 1 estrucura normal, 2 estructura tracking
+        diccionario = funciones2.inferencia2(imagen, idImagen, ruta_label, ruta_lidar, diccionario, ruta_calibracion, True, 0, 2) #Con 0 no info, 1 toda info, 2 info imagenes ; 1 estrucura normal, 2 estructura tracking
         # Guardar el diccionario actualizado en el archivo
         with open(ruta_diccionario, 'wb') as file:
             pickle.dump(diccionario, file)
