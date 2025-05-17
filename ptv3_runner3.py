@@ -14,9 +14,8 @@ import torch.nn.functional as F
 import torch.optim as optim
 from tqdm import tqdm
 import time
-
-
-#### dataset
+import matplotlib.pyplot as plt
+import os
 
 # Cargar el archivo .pkl que contiene el diccionario
 archivo_pickle = 'diccionario0000.pkl'
@@ -28,6 +27,7 @@ try:
 except FileNotFoundError:
     print(f"Error: El archivo {archivo_pickle} no fue encontrado.")
     diccionario = {}
+
 
 class_to_idx = {
     'car': 0,
@@ -167,6 +167,7 @@ class PTv3_deteccion(nn.Module):
             nn.ReLU(),
             nn.Linear(32, 8)
         )
+
     
     def forward(self, batch_ventanas: List[torch.Tensor]) -> torch.Tensor:
 
@@ -183,13 +184,12 @@ class PTv3_deteccion(nn.Module):
         point_features = self.point_encoder(points_dict)
 
         #print("---finalizada la obtencion de caracteristicas ---")
-        #print(point_features)
-        feat_out = self.feature_layer(point_features["feat"])
+        #print(point_features["feat"].size())
+        #feat_out = self.feature_layer(point_features["feat"])
 
-        """resultado_final = [];
-        offset = [0] + points_dict["offset"].tolist()
-        mean_feats = [feat_out[start:end].mean(dim=0, keepdim=True) for start, end in zip(offset[:-1], offset[1:])]
-        resultado_final.append(torch.cat(mean_feats, dim=0))"""
+        feats_mean = torch.mean(point_features["feat"], dim=0, keepdim=True)  # shape: [1, 128]
+        #print(f"feats mean: {feats_mean.size()}")
+        feat_out = self.feature_layer(feats_mean)
 
         return feat_out #torch.stack(resultado_final)
 
@@ -198,7 +198,7 @@ class PTv3_deteccion(nn.Module):
 class RegresionLineal(nn.Module):
     def __init__(self, input_dim):
         super(RegresionLineal, self).__init__()
-        self.linear = nn.Linear(input_dim, 7)  # Regresión para 7 valor
+        self.linear = nn.Linear(input_dim, 6)  # Regresión para 6 valores
 
     def forward(self, x):
         return self.linear(x)
@@ -213,23 +213,28 @@ class RegresionCiclica(nn.Module):
         sin_output = self.linear_sin(torch.sin(x))
         cos_output = self.linear_cos(torch.cos(x))
         return sin_output + cos_output  # Combinación de ambos
+    
+class ClaseClasificacion(nn.Module):
+    def __init__(self, input_dim):
+        super(ClaseClasificacion, self).__init__()
+        self.linear = nn.Linear(input_dim, 5)
 
-
-
-
-### Uso del modelo ###
-ventanas_generadas = generar_ventanas(objetos_dict, ventana=3)
-ventana_dataset = VentanaDataset(ventanas_generadas)
-ventana_dataloader = DataLoader(ventana_dataset, batch_size=4, shuffle=False, collate_fn=ventana_collate)
-
-model = PTv3_deteccion(grid_size=(30, 30))
-
+    def forward(self, x):
+        return self.linear(x)
 
 # Verificar si CUDA está disponible
 if torch.cuda.is_available():
     device = torch.device("cuda")
 else:
     device = torch.device("cpu")
+
+### Uso del modelo ###
+ventanas_generadas = generar_ventanas(objetos_dict, ventana=3)
+ventana_dataset = VentanaDataset(ventanas_generadas)
+ventana_dataloader = DataLoader(ventana_dataset, batch_size=4, shuffle=False, collate_fn=ventana_collate)
+
+# Cargar el modelo principal
+model = PTv3_deteccion(grid_size=(30, 30))
 
 print(f"device= {device}")
 model.to(device)
@@ -243,82 +248,126 @@ print("\n -----> Entrenamiento <-----\n")
 model.train()
 
 # Crear los modelos
-modelo_lineal = RegresionLineal(input_dim=7).to('cuda')
+num_clases = len(class_to_idx)
+modelo_clase = ClaseClasificacion(input_dim=1).to(device)
+modelo_lineal = RegresionLineal(input_dim=6).to('cuda')
 modelo_ciclico = RegresionCiclica(input_dim=1).to('cuda')
 
-# Definir los optimizadores
-opt_lineal = optim.Adam(modelo_lineal.parameters(), lr=0.001)
-opt_ciclico = optim.Adam(modelo_ciclico.parameters(), lr=0.001)
+# Definir el optimizador
+opt = optim.Adam(
+    list(modelo_lineal.parameters()) +
+    list(modelo_ciclico.parameters()) +
+    list(modelo_clase.parameters()),
+    lr=0.001
+)
 
 # Definir la función de pérdida
 criterio = nn.MSELoss()
 
 # Lista para almacenar los resultados finales de todos los lotes
 
+modelo_path = "modelos_combinados.pth"
 
-epochs = 20
+#if os.path.exists(modelo_path):
+# Cargar los modelos de regresión
+wrapper = torch.load("modelos_combinados.pth", map_location=device)
+
+model.load_state_dict(wrapper["model_principal_state_dict"])
+modelo_clase.load_state_dict(wrapper["modelo_clase_state_dict"])
+modelo_lineal.load_state_dict(wrapper["modelo_lineal_state_dict"])
+modelo_ciclico.load_state_dict(wrapper["modelo_ciclico_state_dict"])
+opt.load_state_dict(wrapper["optimizer_state_dict"])
+criterio_clase = nn.CrossEntropyLoss()
+
+losses = [] 
+
+epochs = 1
 # Entrenamiento
 for epoch in range(epochs):
     print(f"epoch {epoch+1}/{epochs}")
     resultados_finales = []
+    epoch_losses = [] 
     for batch in tqdm(ventana_dataloader):
-        entrada = batch["entrada"][0]
-        salida = batch["salida"][0]
-        #print(entrada)
-        #print(salida)
-        entrada = list(torch.unbind(entrada, dim=0))
+        batch_size = len(batch["entrada"])
+        for i in range(batch_size):
+            entrada = batch["entrada"][i]
+            salida = batch["salida"][i]
+            #print(f"input entrada: {entrada}")
+            #print(f"target salida: {salida}")
 
-        s = model(entrada)
-        s_reducida = vecinos_proximos_agregar(s,3) # k-vecinos 3
-        #print(s_reducida)
+            entrada = list(torch.unbind(entrada, dim=0))
 
-        # Paso 2: Dividir en regresión lineal y cíclica
-        s_lineal = s_reducida[:7].view(1, -1)  # Asegúrate de que tenga forma [1, 7]
-        s_ciclico = s_reducida[7:].view(1, -1)  # Asegúrate de que tenga forma [1, 1]
+            s = model(entrada)
+            #print(f"prediccion: {s}")
 
-        salida_lineal = salida[:7].view(1, -1)  # Asegúrate de que tenga forma [1, 7]
-        salida_ciclica = salida[7:].view(1, -1)  # Asegúrate de que tenga forma [1, 1]
+            # Separación de características
+            s_clase   = s[:, 0].view(1, 1)         
+            s_lineal  = s[:, 1:7]                  
+            s_ciclico = s[:, 7].view(1, 1)         
 
-        s_lineal = s_lineal.to(device)  # Mover s_lineal a la GPU
-        s_ciclico = s_ciclico.to(device)  # Mover s_ciclico a la GPU
-        salida_lineal = salida_lineal.to(device)  # Mover salida_lineal a la GPU
-        salida_ciclica = salida_ciclica.to(device)  # Mover salida_ciclica a la GPU
+            # Targets
+            target_clase   = salida[0].long().view(1).to(device)     
+            target_lineal  = salida[1:7].view(1, -1).to(device)      
+            target_ciclico = salida[7].view(1, 1).to(device)         
 
-        # Paso 3: Regresión lineal
-        pred_lineal = modelo_lineal(s_lineal)
-        loss_lineal = criterio(pred_lineal, salida_lineal)
+            #predicciones
+            pred_clase = modelo_clase(s_clase).to(device)  
+            pred_lineal = modelo_lineal(s_lineal).to(device)  
+            pred_ciclico = modelo_ciclico(s_ciclico).to(device)  
 
-        # Paso 4: Regresión cíclica
-        pred_ciclico = modelo_ciclico(s_ciclico)
-        loss_ciclico = criterio(pred_ciclico, salida_ciclica)
+            # Regresiones
+            loss_class = criterio_clase(pred_clase, target_clase)
+            loss_lineal = criterio(pred_lineal, target_lineal)
+            loss_ciclico = criterio(pred_ciclico, target_ciclico)
 
-        loss_total = loss_lineal + loss_ciclico
+            loss_total = loss_class + loss_lineal + loss_ciclico
 
-        # Paso hacia atrás
-        opt_lineal.zero_grad()
-        opt_ciclico.zero_grad()
-        loss_total.backward()
-        opt_lineal.step()
-        opt_ciclico.step()
+            # Paso hacia atrás
+            opt.zero_grad()
+            loss_total.backward()
+            opt.step()
 
-        # Paso 7: Combinar resultados y almacenar
-        resultado_final = torch.cat((pred_lineal.flatten(), pred_ciclico.flatten()), dim=0)
-        resultados_finales.append(resultado_final)
+            # Paso 7: Combinar resultados y almacenar
+            resultado_final = torch.cat((torch.argmax(pred_clase).unsqueeze(0).int(), pred_lineal.flatten(), pred_ciclico.flatten()), dim=0)
+            resultados_finales.append(resultado_final)
 
-        # Imprimir resultados por lote
-        #print(f"Resultado final del lote: {resultado_final}")
-        #print(f"Pérdida Lineal: {loss_lineal.item()}, Pérdida Cíclica: {loss_ciclico.item()}")
+            # Imprimir resultados
+            #print(f"Resultado final del lote: {resultado_final}")
+            #print(f"Pérdida Lineal: {loss_lineal.item()}, Pérdida Cíclica: {loss_ciclico.item()}")
+            epoch_losses.append(loss_total.item())   
+    
+    avg_loss = sum(epoch_losses) / len(epoch_losses)
+    losses.append(sum(epoch_losses)/len(epoch_losses))
 
-        
 
-    # Guardar los modelos al final de cada época
-    #torch.save(modelo_lineal.state_dict(), f"modelo_lineal_epoch_{epoch+1}.pt")
-    #torch.save(modelo_ciclico.state_dict(), f"modelo_ciclico_epoch_{epoch+1}.pt")
 
+#Wrapper de modelos
+wrapper = {
+    "model_principal_state_dict": model.state_dict(),
+    "modelo_lineal_state_dict": modelo_lineal.state_dict(),
+    "modelo_ciclico_state_dict": modelo_ciclico.state_dict(),
+    "modelo_clase_state_dict": modelo_clase.state_dict(),
+    "optimizer_state_dict": opt.state_dict(),
+}
+
+# Guardar los modelos
+torch.save(wrapper, "modelos_combinados.pth")
 
 print("__________________ Resultado del Entrenamiento _____________________")
+plt.figure(figsize=(8,4))
+plt.plot(range(1, len(losses)+1), losses, marker='o')
+plt.title('Evolución del loss promedio')
+plt.xlabel('Epoch')
+plt.ylabel('Loss mean')
+plt.tight_layout()
+plt.savefig("entrenamiento_loss.png")
+print("Gráfica guardada como entrenamiento_loss.png")
 
-print(resultados_finales)
+#print(resultados_finales[-1])
+
+
+
+
 
 
 def correr_prueba():
