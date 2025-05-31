@@ -10,7 +10,7 @@ import time
 # Definicion de rutas
 
 idImagen = "000000"
-idSeccion = "0001"
+idSeccion = "0000"
 ruta_kitti = 'datos'
 
 ruta_imagen = f'{ruta_kitti}/imagenes/{idSeccion}/{idImagen}.png'
@@ -46,12 +46,12 @@ def save_dictionary(diccionario, file_pkl):
     print(f"Diccionario guardado en {file_pkl}.")
 
 # Crear diccionario
-ruta_diccionario = f'dicc1.pkl'
+ruta_diccionario = f'dicc4.pkl'
 diccionario = load_dictionary(ruta_diccionario)
 
 # Definir el rango de idImagen desde "000000" hasta "000010" (puedes cambiar el valor de x)
 start_id = 0  # Representa 000000
-end_id = 15  # Representa 000700
+end_id = 155  # Representa 000700
 
 diccs = {}
 # Bucle para recorrer el rango de idImagen
