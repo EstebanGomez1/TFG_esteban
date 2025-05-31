@@ -16,18 +16,7 @@ from tqdm import tqdm
 import time
 import matplotlib.pyplot as plt
 import os
-
-# Cargar el archivo .pkl que contiene el diccionario
-archivo_pickle = 'diccionario0000.pkl'
-
-try:
-    with open(archivo_pickle, 'rb') as file:
-        diccionario = pickle.load(file)
-    print("Diccionario cargado exitosamente.")
-except FileNotFoundError:
-    print(f"Error: El archivo {archivo_pickle} no fue encontrado.")
-    diccionario = {}
-
+import dataCompiler
 
 class_to_idx = {
     'car': 0,
@@ -36,109 +25,6 @@ class_to_idx = {
     'cyclist': 3,
     'truck': 4
 }
-
-def generar_ventanas(objetos_dict, ventana=3):
-    """
-    Aplica una ventana deslizante sobre las imágenes de cada objeto y obtiene como salida la etiqueta de la última imagen de la ventana.
-    """
-    ventanas = []
-
-    for objeto_id, datos in objetos_dict.items():
-        puntos = datos["points"]
-        labels = datos["labels"]
-        num_imagenes = len(puntos)
-
-        for i in range(num_imagenes - ventana + 1):
-            ventana_actual = puntos[i:i + ventana]
-            entrada = ventana_actual  # Lista de nubes de puntos
-            salida = labels[i + ventana - 1]  # Último label de la ventana
-            ventanas.append((entrada, salida))
-
-    return ventanas
-
-class VentanaDataset(Dataset):
-    def __init__(self, ventanas):
-        self.ventanas = ventanas
-
-    def __len__(self):
-        return len(self.ventanas)
-
-    def __getitem__(self, idx):
-        entrada, salida = self.ventanas[idx]
-
-        # Convertir entrada a tensores correctamente
-        entrada = [e.clone().detach().float() if isinstance(e, torch.Tensor) else torch.tensor(e, dtype=torch.float32) for e in entrada]
-
-        # Extraer solo los valores relevantes de salida
-        if isinstance(salida, dict):
-            salida = torch.tensor([
-                class_to_idx.get(salida.get("class", 0), -1),
-                salida.get("x", 0.0),
-                salida.get("y", 0.0),
-                salida.get("z", 0.0),
-                salida.get("length", 0.0),
-                salida.get("height", 0.0),
-                salida.get("width", 0.0),
-                salida.get("rot_y", 0.0)
-            ], dtype=torch.float32)
-        else:
-            raise ValueError(f"Salida en índice {idx} no es un diccionario. Datos: {self.ventanas[idx]}")
-
-        return {"entrada": entrada, "salida": salida}
-
-
-# Función de collation para batches
-def ventana_collate(batch):
-    entradas = [item["entrada"] for item in batch]  # Lista de listas de tensores
-    salidas = torch.stack([item["salida"] for item in batch])  # Labels en batch
-
-    # Encontrar la longitud máxima de las nubes de puntos en todas las entradas del batch
-    max_len = max(len(seq) for entrada in entradas for seq in entrada)  # La longitud máxima de la secuencia dentro de cada entrada
-
-    # Rellenar las secuencias con ceros para que tengan la misma longitud
-    entradas_padded = [
-        [torch.cat([seq, torch.ones(max_len - len(seq), seq.size(1))], dim=0) if len(seq) < max_len else seq for seq in entrada]
-        for entrada in entradas
-    ]
-
-    # Apilar las secuencias rellenas
-    entradas_padded = [torch.stack(entrada) for entrada in entradas_padded]
-
-    return {"entrada": entradas_padded, "salida": salidas}
-
-
-def vecinos_proximos_agregar(tensor, k=3):
-    # Calcular el centroide (media de los vectores)
-    centroide = tensor.mean(dim=0, keepdim=True)
-
-    # Calcular la distancia euclidiana entre cada vector y el centroide
-    distancias = F.pairwise_distance(tensor, centroide)
-
-    # Seleccionar los índices de los k vecinos más cercanos
-    indices_k_cercanos = torch.topk(distancias, k=k, largest=False).indices
-
-    # Obtener los k vecinos más cercanos
-    vecinos_cercanos = tensor[indices_k_cercanos]
-
-    # Agregar los vecinos más cercanos
-    vector_agregado = vecinos_cercanos.mean(dim=0)
-
-    return vector_agregado
-
-
-objetos_dict = {}
-
-for img_id, objects in diccionario.items():
-    for obj_id, obj_data in objects.items():
-        puntos = obj_data["points"]  # Nube de puntos
-        label = obj_data["label"]  # Info del objeto
-
-        # Guardar todos los puntos y labels asociados a este objeto
-        if obj_id not in objetos_dict:
-            objetos_dict[obj_id] = {"points": [], "labels": []}
-
-        objetos_dict[obj_id]["points"].append(puntos)
-        objetos_dict[obj_id]["labels"].append(label)
 
 class PTv3_deteccion(nn.Module):
     def __init__(self, grid_size: tuple):
@@ -255,9 +141,13 @@ else:
     device = torch.device("cpu")
 
 ### Uso del modelo ###
-ventanas_generadas = generar_ventanas(objetos_dict, ventana=3)
-ventana_dataset = VentanaDataset(ventanas_generadas)
-ventana_dataloader = DataLoader(ventana_dataset, batch_size=4, shuffle=False, collate_fn=ventana_collate)
+# ventanas_generadas = generar_ventanas(objetos_dict, ventana=3)
+# ventana_dataset = VentanaDataset(ventanas_generadas)
+# ventana_dataloader = DataLoader(ventana_dataset, batch_size=4, shuffle=False, collate_fn=ventana_collate)
+
+
+diccionario = dataCompiler.load_dictionary("dicc3.pkl")
+ventana_dataloader = dataCompiler.getDataLoader(diccionario)
 
 # Cargar el modelo principal
 model = PTv3_deteccion(grid_size=(30, 30))
@@ -301,7 +191,7 @@ losses_class = []
 losses_lineal = []
 losses_ciclico = []
 penalizaciones = []
-epochs = 10
+epochs = 1
 # Entrenamiento
 for epoch in range(epochs):
     epoch_total = []
@@ -314,67 +204,63 @@ for epoch in range(epochs):
     print(f"epoch {epoch+1}/{epochs}")
     resultados_finales = []
     epoch_losses = [] 
-    for batch in tqdm(ventana_dataloader):
-        batch_size = len(batch["entrada"])
-        for i in range(batch_size):
-            entrada = batch["entrada"][i]
-            salida = batch["salida"][i]
-            #print(f"input entrada: {entrada}")
-            #print(f"target salida: {salida}")
+    for entrada, salida in tqdm(ventana_dataloader):
+        print(f"input entrada: {entrada}")
+        print(f"target salida: {salida}")
 
-            entrada = list(torch.unbind(entrada, dim=0))
+        #entrada = list(torch.unbind(entrada, dim=0))
 
-            s = model(entrada)
-            #print(f"prediccion: {s}")
+        s = model(entrada)
+        #print(f"prediccion: {s}")
 
-            # Separación de características
-            s_clase   = s[:, 0].view(1, 1)         
-            s_lineal  = s[:, 1:7]                  
-            s_ciclico = s[:, 7].view(1, 1)         
+        # Separación de características
+        s_clase   = s[:, 0].view(1, 1)         
+        s_lineal  = s[:, 1:7]                  
+        s_ciclico = s[:, 7].view(1, 1)         
 
-            # Targets
-            target_clase   = salida[0].long().view(1).to(device)     
-            target_lineal  = salida[1:7].view(1, -1).to(device)      
-            target_ciclico = salida[7].view(1, 1).to(device)         
+        # Targets
+        target_clase   = salida[0].long().view(1).to(device)     
+        target_lineal  = salida[1:7].view(1, -1).to(device)      
+        target_ciclico = salida[7].view(1, 1).to(device)         
 
-            #predicciones
-            pred_clase = modelo_clase(s_clase).to(device)  
-            pred_lineal = modelo_lineal(s_lineal).to(device)  
-            pred_ciclico = modelo_ciclico(s_ciclico).to(device)  
+        #predicciones
+        pred_clase = modelo_clase(s_clase).to(device)  
+        pred_lineal = modelo_lineal(s_lineal).to(device)  
+        pred_ciclico = modelo_ciclico(s_ciclico).to(device)  
 
-            # Regresiones
-            loss_class = criterio_clase(pred_clase, target_clase)
-            loss_lineal = criterio(pred_lineal, target_lineal)
-            loss_ciclico = criterio(pred_ciclico, target_ciclico)
+        # Regresiones
+        loss_class = criterio_clase(pred_clase, target_clase)
+        loss_lineal = criterio(pred_lineal, target_lineal)
+        loss_ciclico = criterio(pred_ciclico, target_ciclico)
 
-            #loss_total = loss_class + loss_lineal + loss_ciclico
+        #loss_total = loss_class + loss_lineal + loss_ciclico
 
-            # Performance loss
-            loss_total, loss_class, loss_lineal, loss_ciclico, penalizacion = performance_loss(
-                pred_clase, target_clase, pred_lineal, target_lineal, pred_ciclico, target_ciclico,
-                alpha=1.0, beta=1.0, gamma=1.0, delta=0.1
-            )
+        # Performance loss
+        loss_total, loss_class, loss_lineal, loss_ciclico, penalizacion = performance_loss(
+            pred_clase, target_clase, pred_lineal, target_lineal, pred_ciclico, target_ciclico,
+            alpha=1.0, beta=1.0, gamma=1.0, delta=0.1
+        )
 
-            # backward
-            opt.zero_grad()
-            loss_total.backward()
-            opt.step()
+        # backward
+        opt.zero_grad()
+        loss_total.backward()
+        opt.step()
 
-            # Guarda las métricas
-            epoch_total.append(loss_total.item())
-            epoch_class.append(loss_class.item())
-            epoch_lineal.append(loss_lineal.item())
-            epoch_ciclico.append(loss_ciclico.item())
-            epoch_penal.append(penalizacion.item())
+        # Guarda las métricas
+        epoch_total.append(loss_total.item())
+        epoch_class.append(loss_class.item())
+        epoch_lineal.append(loss_lineal.item())
+        epoch_ciclico.append(loss_ciclico.item())
+        epoch_penal.append(penalizacion.item())
 
 
-            #epoch_losses.append(loss_total.item())   
-        # Guarda el promedio de cada métrica por epoch
-        losses_total.append(sum(epoch_total) / len(epoch_total))
-        losses_class.append(sum(epoch_class) / len(epoch_class))
-        losses_lineal.append(sum(epoch_lineal) / len(epoch_lineal))
-        losses_ciclico.append(sum(epoch_ciclico) / len(epoch_ciclico))
-        penalizaciones.append(sum(epoch_penal) / len(epoch_penal))
+        #epoch_losses.append(loss_total.item())   
+    # Guarda el promedio de cada métrica por epoch
+    losses_total.append(sum(epoch_total) / len(epoch_total))
+    losses_class.append(sum(epoch_class) / len(epoch_class))
+    losses_lineal.append(sum(epoch_lineal) / len(epoch_lineal))
+    losses_ciclico.append(sum(epoch_ciclico) / len(epoch_ciclico))
+    penalizaciones.append(sum(epoch_penal) / len(epoch_penal))
             
     # avg_loss = sum(epoch_losses) / len(epoch_losses)
     # losses.append(sum(epoch_losses)/len(epoch_losses))
@@ -411,24 +297,3 @@ print("Gráfica guardada como performance_loss.png")
 
 #print(resultados_finales[-1])
 
-
-
-
-
-
-def correr_prueba():
-    ventanas_generadas = generar_ventanas(objetos_dict, ventana=3)
-    ventana_dataset = VentanaDataset(ventanas_generadas)
-    ventana_dataloader = DataLoader(ventana_dataset, batch_size=4, shuffle=False, collate_fn=ventana_collate)
-    for batch in ventana_dataloader:
-        print("Batch completo de entradas:")
-        for i, entrada in enumerate(batch["entrada"]):
-            print(f"\n🔹 Entrada {i}:")
-            for j, tensor in enumerate(entrada):
-                print(f" Tensor {j}: {tensor.shape}\n")  # Convertir a numpy para más claridad
-        print("\nBatch de salidas:")
-        print(batch["salida"])
-        break  # Solo mostramos un batch para no llenar la consola
-
-
-#correr_prueba()

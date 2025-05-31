@@ -102,135 +102,52 @@ def generar_ventanas(objetos_dict, ventana=3):
         outputs.append(labels_objeto)
 
     dataset = {
-        "inputs": inputs,   # List[List[window]]
-        "outputs": outputs  # List[List[label]]
+        "inputs": inputs,   
+        "outputs": outputs 
     }
     return dataset
 
-"""class VentanaDataset(Dataset):
-    def __init__(self, ventanas):
-        self.ventanas = ventanas
-        
-
-    def __len__(self):
-        return len(self.ventanas)
-
-    def __getitem__(self, idx):
-        entrada, salida = self.ventanas[idx]
-
-        # Convertir entrada a tensores correctamente
-        entrada = [e.clone().detach().float() if isinstance(e, torch.Tensor) else torch.tensor(e, dtype=torch.float32) for e in entrada]
-
-        # Extraer solo los valores relevantes de salida
-        if isinstance(salida, dict):
-            salida = torch.tensor([
-                class_to_idx.get(salida.get("class", 0), -1),
-                salida.get("x", 0.0),
-                salida.get("y", 0.0),
-                salida.get("z", 0.0),
-                salida.get("length", 0.0),
-                salida.get("height", 0.0),
-                salida.get("width", 0.0),
-                salida.get("rot_y", 0.0)
-            ], dtype=torch.float32)
-        else:
-            raise ValueError(f"Salida en índice {idx} no es un diccionario. Datos: {self.ventanas[idx]}")
-
-        return {"entrada": entrada, "salida": salida}"""
-
-
-"""class WindowedDataset(Dataset):
-    def __init__(self, data_dict):
-        self.data = []
-
-        inputs = data_dict['inputs']
-        outputs = data_dict['outputs']
-
-        for i in range(len(inputs)):
-            input_seq = inputs[i]
-            output_seq = outputs[i]
-            self.data.append((input_seq, output_seq))
-
-    def __len__(self):
-        return len(self.data)
-
-    def __getitem__(self, idx):
-        input_seq, output_seq = self.data[idx]
-
-        # Convertir a tensores
-        points = torch.tensor(points, dtype=torch.float32)
-        labels = torch.tensor(labels, dtype=torch.long)
-        return points, labels"""
+def parse_label(label_dict):
+    return torch.tensor([
+        class_to_idx.get(label_dict.get("class", "car"), -1),
+        label_dict.get("x", 0.0),
+        label_dict.get("y", 0.0),
+        label_dict.get("z", 0.0),
+        label_dict.get("length", 0.0),
+        label_dict.get("height", 0.0),
+        label_dict.get("width", 0.0),
+        label_dict.get("rot_y", 0.0)
+    ], dtype=torch.float32)
 
 class WindowedDataset(Dataset):
-    def __init__(self, data_dict):
-        self.inputs = data_dict['inputs']
-        self.outputs = data_dict['outputs']
+    def __init__(self, objetos_dict, ventana=3):
+        self.ventana = ventana
+        self.inputs = []
+        self.outputs = []
 
-        all_tokens = set()
+        for objeto_id in sorted(objetos_dict.keys()):
+            imagenes = objetos_dict[objeto_id]
+            img_ids = sorted(imagenes.keys())
 
-        for window in self.inputs:
-            for seq in window:
-                if isinstance(seq, np.ndarray):
-                    seq = seq.tolist()
+            puntos = [imagenes[img_id]["points"] for img_id in img_ids]
+            labels = [imagenes[img_id]["labels"] for img_id in img_ids]
+            num_imagenes = len(puntos)
 
-                for token in seq:
-                    # Si token es array, convertirlo a lista y tomar el primer elemento
-                    if isinstance(token, np.ndarray):
-                        token = token.tolist()
+            for i in range(num_imagenes - ventana + 1):
+                ventana_actual = puntos[i:i + ventana]
+                salida = labels[i + ventana - 1]
 
-                        # Si el resultado es una lista, tomar el primer string real
-                        if isinstance(token, list):
-                            token = token[0]
+                tensor_ventana = [torch.tensor(p) for p in ventana_actual]
+                tensor_salida = parse_label(salida)  # <-- aquí parseamos el label dict a tensor
 
-                    all_tokens.add(str(token))  # convertir todo a string por seguridad
-
-        for label_seq in self.outputs:
-            if isinstance(label_seq, np.ndarray):
-                label_seq = label_seq.tolist()
-
-            for token in label_seq:
-                if isinstance(token, np.ndarray):
-                    token = token.tolist()
-                    if isinstance(token, list):
-                        token = token[0]
-                all_tokens.add(str(token))
-
-        self.vocab = {token: idx for idx, token in enumerate(sorted(all_tokens))}
-        self.inverse_vocab = {idx: token for token, idx in self.vocab.items()}
+                self.inputs.append(tensor_ventana)
+                self.outputs.append(tensor_salida)
 
     def __len__(self):
         return len(self.inputs)
 
     def __getitem__(self, idx):
-        input_window = self.inputs[idx]
-        output_seq = self.outputs[idx]
-
-        input_ids = []
-        for sublist in input_window:
-            row = []
-            for token in sublist:
-                if isinstance(token, np.ndarray):
-                    token = token.tolist()
-                    if isinstance(token, list):
-                        token = token[0]
-                token_str = str(token)
-                row.append(self.vocab[token_str])
-            input_ids.append(row)
-
-        output_ids = []
-        for token in output_seq:
-            if isinstance(token, np.ndarray):
-                token = token.tolist()
-                if isinstance(token, list):
-                    token = token[0]
-            token_str = str(token)
-            output_ids.append(self.vocab[token_str])
-
-        input_tensor = torch.tensor(input_ids, dtype=torch.long)
-        output_tensor = torch.tensor(output_ids, dtype=torch.long)
-
-        return input_tensor, output_tensor
+        return self.inputs[idx], self.outputs[idx]
 
 
 # Función de collation para batches
@@ -338,9 +255,8 @@ def correr_prueba(ventana_dataloader):
         print("⚠️ No se leyó ningún batch (el DataLoader está vacío o no itera)")
 
 def getDataLoader(diccionario):
-    ventanas_generadas = generar_ventanas(format_dicc(diccionario), ventana=3)
-    ventana_dataset = WindowedDataset(ventanas_generadas)
-    return DataLoader(ventana_dataset, batch_size=4, shuffle=False, collate_fn=ventana_collate)
+    dataset = WindowedDataset(format_dicc(diccionario))
+    return DataLoader(dataset, batch_size=1, shuffle=False)
     
 ### Uso del modelo ###
 
@@ -348,6 +264,8 @@ def getDataLoader(diccionario):
 # ventanas_generadas = generar_ventanas(format_dicc(diccionario), ventana=3)
 # ventana_dataset = VentanaDataset(ventanas_generadas)
 # ventana_dataloader = DataLoader(ventana_dataset, batch_size=4, shuffle=False, collate_fn=ventana_collate)
+
+
 
 
 def ver_dicc(diccionario):
@@ -359,6 +277,16 @@ def ver_format_dicc(diccionario):
     for obj_id in diccionario:
         print(f"\n---------------------------------------{obj_id}-----------------------------------------------\n")
         pprint(diccionario[obj_id])
+
+def ver_dataSet(ventana_dataset):
+    for i in range(3):  # Mira las primeras 3 muestras
+        ventana, label = ventana_dataset[i]
+        print(f"Sample {i}:")
+        print(f"  Ventana (lista de {len(ventana)} tensores):")
+        for j, t in enumerate(ventana):
+            print(f"    Tensor {j}: shape={t.shape}, dtype={t.dtype}")
+        print(f"  Label tensor: shape={label.shape}, values={label}")
+        print("-"*40)
             
         
 
@@ -366,7 +294,7 @@ def data_compiler(numDiccs=2):
     diccionarios =[]
     #for i in range(0, numDiccs):
     #    #nombre_archivo = f"diccionario{str(i).zfill(4)}.pkl"
-    nombre_archivo = 'dicc1.pkl'
+    nombre_archivo = 'dicc3.pkl'
     if os.path.exists(nombre_archivo):
         diccionario = load_dictionary(nombre_archivo)
         diccionarios.append(diccionario)
@@ -405,19 +333,25 @@ diccNormal = data_compiler()[0]
 #dicc_format = format_dicc(dicc)
 #ver_format_dicc(dicc_format)
 #pprint(dicc_format)
+"""
+dicc = diccionario_prueba
+dicc = format_dicc(diccNormal)"""
 
-"""dicc = diccionario_prueba
-dicc = format_dicc(diccNormal)
-
-ventanas_generadas = generar_ventanas(dicc, ventana=3)
+"""ventanas_generadas = generar_ventanas(dicc, ventana=3)
 print(f"long outs: {len(ventanas_generadas['outputs'])}")
 print(ventanas_generadas['outputs'][1][0])
 print(len(ventanas_generadas['inputs'][1][0]))"""
 
-ventanas_generadas = generar_ventanas(format_dicc(diccNormal), ventana=3)
-ventana_dataset = WindowedDataset(ventanas_generadas)
-dataloader = DataLoader(ventana_dataset, batch_size=4, shuffle=False, collate_fn=ventana_collate)
-for batch_inputs, batch_labels in dataloader:
-    print(batch_inputs, batch_labels)
+#ventanas_generadas = format_dicc(diccNormal)
+#pprint(ventanas_generadas)
+#ventana_dataset = WindowedDataset(ventanas_generadas)
 
-print("-------------------")
+
+"""dicc = load_dictionary("dicc3.pkl")
+dataloader = getDataLoader(dicc)
+batch = next(iter(dataloader))
+print("Inputs:", len(batch[0]))
+print("Labels:", batch[1])
+print("-------------------")"""
+
+
