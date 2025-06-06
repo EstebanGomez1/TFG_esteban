@@ -17,6 +17,7 @@ import time
 import matplotlib.pyplot as plt
 import os
 from pprint import pprint
+from torch.utils.data import ConcatDataset, DataLoader
 
 def load_dictionary(file_pkl):
     try:
@@ -33,7 +34,10 @@ class_to_idx = {
     'pedestrian': 1,
     'van': 2,
     'cyclist': 3,
-    'truck': 4
+    'truck': 4,
+    'person': 5,
+    'tram': 6,
+    'misc': 7
 }
 
 def generar_ventanas2(objetos_dict, ventana=3):
@@ -124,7 +128,7 @@ class WindowedDataset(Dataset):
         self.ventana = ventana
         self.inputs = []
         self.outputs = []
-
+        skip_classes = {4, 6, 7}
         for objeto_id in sorted(objetos_dict.keys()):
             imagenes = objetos_dict[objeto_id]
             img_ids = sorted(imagenes.keys())
@@ -136,9 +140,11 @@ class WindowedDataset(Dataset):
             for i in range(num_imagenes - ventana + 1):
                 ventana_actual = puntos[i:i + ventana]
                 salida = labels[i + ventana - 1]
-
+                clase_idx = class_to_idx.get(salida.get("class", "car"), -1)
+                if clase_idx in skip_classes:
+                    continue  # salta esta muestra
                 tensor_ventana = [torch.tensor(p) for p in ventana_actual]
-                tensor_salida = parse_label(salida)  # <-- aquí parseamos el label dict a tensor
+                tensor_salida = parse_label(salida)
 
                 self.inputs.append(tensor_ventana)
                 self.outputs.append(tensor_salida)
@@ -148,6 +154,24 @@ class WindowedDataset(Dataset):
 
     def __getitem__(self, idx):
         return self.inputs[idx], self.outputs[idx]
+
+"""def collate_fn_padding(batch):
+    batch_inputs, batch_outputs = zip(*batch)  # batch_inputs: List[ (win1, win2, win3) ]
+    max_len = max(t.shape[0] for t in batch_inputs[0])
+    #print(f"maxima= {max_len}")
+    padded_inputs = []
+    for ventana in batch_inputs[0]:
+        
+        padded = F.pad(ventana, (0, 0, 0, max_len-len(ventana)), mode='constant', value=0)
+        padded_inputs.append(padded)
+        #print(len(padded))
+
+    return padded_inputs, torch.stack(batch_outputs)"""
+
+def custom_collate_fn(batch):
+    entradas = [item[0] for item in batch]  # lista de listas de tensores
+    salidas = [item[1] for item in batch]   # lista de tensores label
+    return entradas, salidas
 
 
 # Función de collation para batches
@@ -256,7 +280,7 @@ def correr_prueba(ventana_dataloader):
 
 def getDataLoader(diccionario):
     dataset = WindowedDataset(format_dicc(diccionario))
-    return DataLoader(dataset, batch_size=1, shuffle=False)
+    return DataLoader(dataset, batch_size=1, shuffle=False, collate_fn=custom_collate_fn)
     
 ### Uso del modelo ###
 
@@ -323,12 +347,12 @@ diccionario_prueba = {
 
 
 
-print("-------------------")
+#print("-------------------")
 #datal = getDataLoader(data_compiler()[0])
 #print("Longitud del dataset:", len(datal.dataset))
 #correr_prueba(datal)
 
-diccNormal = data_compiler()[0]
+#diccNormal = data_compiler()[0]
 #ver_dicc(dicc)
 #dicc_format = format_dicc(dicc)
 #ver_format_dicc(dicc_format)
@@ -347,11 +371,44 @@ print(len(ventanas_generadas['inputs'][1][0]))"""
 #ventana_dataset = WindowedDataset(ventanas_generadas)
 
 
-"""dicc = load_dictionary("dicc3.pkl")
+"""dicc = load_dictionary("diccionario0.pkl")
 dataloader = getDataLoader(dicc)
-batch = next(iter(dataloader))
-print("Inputs:", len(batch[0]))
-print("Labels:", batch[1])
+for i, batch in enumerate(dataloader):
+    if i == 159:
+        #torch.set_printoptions(threshold=float('inf'))
+        print("Iteración:", i)
+        print("Inputs:", batch[0])
+        print("Labels:", batch[1])
 print("-------------------")"""
 
+##### Fusionar diccionario #####
+
+def getMultiDataLoader(diccionarios):
+    datasets = []
+    for diccionario in diccionarios:
+        datos_formateados = format_dicc(diccionario)
+        dataset = WindowedDataset(datos_formateados)
+        datasets.append(dataset)
+
+    dataset_total = ConcatDataset(datasets)
+    return DataLoader(dataset_total, batch_size=1, shuffle=False, collate_fn=custom_collate_fn)
+
+def load_dicctionaries(total=6):
+    lista_diccionarios = []
+    for i in range(total):  # de 0 a 5
+        dicc_name = f"diccionario{i}.pkl"
+        dicc = load_dictionary(dicc_name)
+        lista_diccionarios.append(dicc)
+    return lista_diccionarios
+
+
+"""print("-------------------")
+dataloader = getMultiDataLoader(load_dicctionaries(5))
+for i, batch in enumerate(dataloader):
+    if i == 2890:
+        torch.set_printoptions(threshold=float('inf'))
+        print("Iteración:", i)
+        print("Inputs:", len(batch[0][0]))
+        print("Labels:", batch[1])
+print(f"numero de ventanas totales: {i}")"""
 
