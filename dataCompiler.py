@@ -173,6 +173,19 @@ def custom_collate_fn(batch):
     salidas = [item[1] for item in batch]   # lista de tensores label
     return entradas, salidas
 
+def custom_collate2_fn(batch):
+    # batch = [([tensor1, tensor2, ...], label_tensor), ...]
+    entradas = []
+    for item in batch:
+        # item[0] es [tensor1, tensor2, ...]
+        entradas.extend(item[0])  # aplanar todas las listas de tensores
+    salidas = [item[1] for item in batch]
+    return entradas, salidas
+
+def custom_collate3_fn(batch):
+    entradas = [item[0] for item in batch]  # lista de listas de tensores
+    salidas = torch.stack([item[1] for item in batch])  # tensor [batch, 8]
+    return entradas, salidas
 
 # Función de collation para batches
 """def ventana_collate(batch):
@@ -382,6 +395,16 @@ for i, batch in enumerate(dataloader):
 print("-------------------")"""
 
 ##### Fusionar diccionario #####
+
+def getMultiDataLoader2(diccionarios):
+    datasets = []
+    for diccionario in diccionarios:
+        datos_formateados = format_dicc(diccionario)
+        dataset = WindowedDataset(datos_formateados)
+        datasets.append(dataset)
+
+    dataset_total = ConcatDataset(datasets)
+    return dataset_total #DataLoader(dataset_total, batch_size=1, shuffle=False, collate_fn=custom_collate_fn)
 
 def getMultiDataLoader(diccionarios):
     datasets = []
