@@ -155,23 +155,75 @@ class WindowedDataset(Dataset):
     def __getitem__(self, idx):
         return self.inputs[idx], self.outputs[idx]
 
-"""def collate_fn_padding(batch):
-    batch_inputs, batch_outputs = zip(*batch)  # batch_inputs: List[ (win1, win2, win3) ]
-    max_len = max(t.shape[0] for t in batch_inputs[0])
-    #print(f"maxima= {max_len}")
-    padded_inputs = []
-    for ventana in batch_inputs[0]:
-        
-        padded = F.pad(ventana, (0, 0, 0, max_len-len(ventana)), mode='constant', value=0)
-        padded_inputs.append(padded)
-        #print(len(padded))
+def normalize_crop_and_box(points, box):
+    """
+    points: Tensor Nx4 (x, y, z, intensidad)
+    box: Tensor 7 (x, y, z, l, w, h, alpha)
+    """
+    # Centro del crop (podrías usar el centroide o el centro de la box)
+    crop_center = points[:, :3].mean(dim=0)  # [3], centroide XYZ
 
-    return padded_inputs, torch.stack(batch_outputs)"""
+    # Normaliza puntos
+    points[:, :3] = points[:, :3] - crop_center
 
-def custom_collate_fn(batch):
-    entradas = [item[0] for item in batch]  # lista de listas de tensores
-    salidas = [item[1] for item in batch]   # lista de tensores label
-    return entradas, salidas
+    # Normaliza bounding box
+    box[1:4] = box[1:4] - crop_center
+
+    return points, box
+
+def normalize_crop_and_box2(points, box):
+    """
+    points: Tensor Nx4 (x, y, z, intensidad)
+    box: Tensor 8 (clase, x, y, z, h, w, l, alpha)
+    """
+    # Centro de la caja (en KITTI: box[1:4])
+    box_center = box[1:4].clone()  # [x, y, z]
+
+    # Normaliza puntos
+    points[:, :3] = points[:, :3] - box_center
+
+    # Normaliza bounding box (centro en origen)
+    box[1:4] = box[1:4] - box_center  # ahora box[1:4] = (0,0,0)
+
+    return points, box
+
+def custom_collate3_fn(batch):
+    # batch = [([tensor1, tensor2, ...], label_tensor), ...]
+    entradas = []
+    salidas = []
+    centros = []  # Para guardar los centroides (si quieres desnormalizar luego)
+    for item in batch:
+        crop_tensors = []
+        for tensor in item[0]:  # lista de tensores del crop
+            puntos, box= normalize_crop_and_box2(tensor.clone(), item[1].clone())
+            crop_tensors.append(puntos)
+            # Como todas las boxes del batch son la misma, solo agregamos una vez
+        entradas.extend(crop_tensors)
+        salidas.append(box)
+        #centros.append(item[1][1:4].clone())
+    return entradas, salidas #, centros
+
+def custom_collate4_fn(batch):
+    # batch = [([tensor1, tensor2, ...], label_tensor), ...]
+    entradas = []
+    salidas = []
+    centros = []  # Para guardar los centroides (si quieres desnormalizar luego)
+    for item in batch:
+        crop_tensors = []
+        for tensor in item[0]:  # lista de tensores del crop
+            puntos, box= normalize_crop_and_box2(tensor.clone(), item[1].clone())
+            crop_tensors.append(puntos)
+            # Como todas las boxes del batch son la misma, solo agregamos una vez
+        entradas.extend(crop_tensors)
+        salidas.append(box)
+        centros.append(item[1][1:4].clone())
+    return entradas, salidas , centros
+
+def get_window_center(list_of_points):
+    # Concatenar todas las nubes de puntos de la ventana
+    all_points = torch.cat(list_of_points, dim=0)  # [N_total, 4]
+    centroide = all_points[:, :3].mean(dim=0)      # [3]
+    return centroide
 
 def custom_collate2_fn(batch):
     # batch = [([tensor1, tensor2, ...], label_tensor), ...]
@@ -182,9 +234,14 @@ def custom_collate2_fn(batch):
     salidas = [item[1] for item in batch]
     return entradas, salidas
 
-def custom_collate3_fn(batch):
+def custom_collate11_fn(batch):
     entradas = [item[0] for item in batch]  # lista de listas de tensores
     salidas = torch.stack([item[1] for item in batch])  # tensor [batch, 8]
+    return entradas, salidas
+
+def custom_collate_fn(batch):
+    entradas = [item[0] for item in batch]  # lista de listas de tensores
+    salidas = [item[1] for item in batch]   # lista de tensores label
     return entradas, salidas
 
 # Función de collation para batches
