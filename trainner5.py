@@ -103,7 +103,8 @@ class PTv3_deteccion(nn.Module):
             qkv_bias=True,
         )
 
-        self.clf_head = nn.Linear(8, 8)      # 8 clases
+        #self.clf_head = nn.Linear(8, 8)      # 8 clases
+        self.norm = nn.LayerNorm(8)
         self.reg_head = nn.Linear(8, 6)      # 6 valores
         self.cyc_head_sin = nn.Linear(8, 1)
         self.cyc_head_cos = nn.Linear(8, 1)      # 1 valor
@@ -136,7 +137,7 @@ class PTv3_deteccion(nn.Module):
             points_dict["feat"] = feat
         feats_mean = torch.mean(point_features["feat"], dim=0, keepdim=True)  # [1, D]
         embedding = self.feature_layer(feats_mean)
-        logits = self.clf_head(embedding)     # [batch, 8]
+        logits = self.norm(embedding)     # [batch, 8]
         reg_out = self.reg_head(embedding)    # [batch, 6]
         sin_out = self.cyc_head_sin(torch.sin(embedding))
         cos_out = self.cyc_head_cos(torch.cos(embedding))
@@ -156,12 +157,23 @@ diccionario = dataCompiler.load_dicctionaries(21)
 dataset_total = dataCompiler.getMultiDataLoader2(diccionario)
 
 # 3. Split en train y val n TODO: añadir semilla, fijar los mismos datos
-seed = 30
+"""seed = 30
 generator = torch.Generator().manual_seed(seed)
 total_len = len(dataset_total)
 val_len = int(0.2 * total_len)
 train_len = total_len - val_len
-train_dataset, val_dataset = random_split(dataset_total, [train_len, val_len], generator=generator)
+train_dataset, val_dataset = random_split(dataset_total, [train_len, val_len], generator=generator)"""
+total_len = len(dataset_total)
+val_len = int(0.2 * total_len)
+train_len = total_len - val_len
+
+indices = list(range(total_len))
+train_indices = indices[:train_len]
+val_indices = indices[train_len:]
+
+from torch.utils.data import Subset
+train_dataset = Subset(dataset_total, train_indices)
+val_dataset = Subset(dataset_total, val_indices)
 
 # 4. DataLoaders finales: **IMPORTANTE: pasa tu custom_collate_fn**
 train_dataloader = DataLoader(
@@ -188,34 +200,53 @@ num_clases = len(class_to_idx)
 epochs = 10
 
 # == MODELOS ==
-model = PTv3_deteccion(grid_size=0.01).to(device)
+model = PTv3_deteccion(grid_size=0.1).to(device)
 
 # == OPTIMIZADOR Y LOSSES ==
+"""opt = optim.AdamW(
+    list(model.parameters()),
+    lr=0.0001
+)"""
 opt = optim.AdamW(
     list(model.parameters()),
-    lr=0.001
+    lr=0.001,
+    weight_decay=1e-4   
 )
 
 start_epoch = 0
 """if os.path.exists("checkpoint_epoch10.pth"):
     start_epoch = load_checkpoint(model, opt, "checkpoint_epoch10.pth")"""
 
-criterio = nn.MSELoss()
-criterio_clase = nn.CrossEntropyLoss(ignore_index=-1)
+#criterio = nn.MSELoss()
+criterio = nn.SmoothL1Loss()
+weights = torch.tensor([
+    0.1,  # car
+    2.0,  # pedestrian
+    2.0,  # van
+    4.0,  # cyclist
+    1e-2, # truck (casi ignora)
+    1e-2, # person (casi ignora)
+    1e-2, # tram (casi ignora)
+    1e-2, # misc (casi ignora)
+], dtype=torch.float32, device='cuda')
+weights = torch.tensor(weights, dtype=torch.float32, device='cuda')
+criterio_clase = nn.CrossEntropyLoss(weight=weights, ignore_index=-1)
 num_classes = 8
 precisions = []
 recalls = []
 mean_IoI3Ds  = []
-contador = -1
+
 for epoch in range(start_epoch, epochs):
     print(f"\nEpoch {epoch+1}/{epochs}")
 
     # ----------- ENTRENAMIENTO -----------
     model.train();
     running_loss = 0.0
+    contador = -1
     #TODO: añadir checkpoints
     for entrada, salida, centros in tqdm(train_dataloader):
         contador = contador +1
+        loss_total = 0
         try:           
             opt.zero_grad()
             logits, reg_out, cyc_out = model(entrada)
@@ -229,12 +260,20 @@ for epoch in range(start_epoch, epochs):
             # Coordenadas relativas al centro del crop
             target_lineal  = salida[0][1:7].unsqueeze(0).to(device) #retocar para solo las dimensiones
             target_ciclico = salida[0][7].view(1,1).to(device)
-
+            metrics_logger.info(f"salida de clase: {logits}")
+            metrics_logger.info(f"target de clase: {target_clase}")
             # Calcula las pérdidas  
             loss_class   = criterio_clase(logits, target_clase)
             loss_lineal  = criterio(reg_out, target_lineal)
-            loss_ciclico = criterio(cyc_out, target_ciclico)
-            loss_total   = loss_class + loss_lineal + loss_ciclico
+            loss_ciclico = criterio(cyc_out, target_ciclico)           
+            alpha = 0.1 #TODO: modificar para aumentar o disminuir la importancia de la parte lineal
+            beta = 1
+            
+            metrics_logger.info(f"clase: {loss_class}")
+            metrics_logger.info(f"lineal: {loss_lineal*alpha}")
+            metrics_logger.info(f"ciclico: {beta*loss_ciclico}")
+            loss_total   = loss_class + loss_lineal*alpha + beta*loss_ciclico
+            metrics_logger.info(f"loss: {loss_total}")
             #loss_total = loss_class + 5.0 * loss_lineal + 5.0 * loss_ciclico
             if torch.isnan(loss_total) or torch.isinf(loss_total):
                 error_logger.info(f"clase: {loss_class}")
@@ -242,6 +281,9 @@ for epoch in range(start_epoch, epochs):
                 error_logger.info(f"ciclico: {loss_ciclico}")
                 continue
             loss_total.backward()
+            total_norm = torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=5.0)
+            # if(total_norm >50):
+            #     print(f" clipping: {total_norm:.2f}")
             opt.step()
             running_loss += loss_total.item()
 
@@ -277,7 +319,8 @@ for epoch in range(start_epoch, epochs):
                 loss_class   = criterio_clase(logits, target_clase)
                 loss_lineal  = criterio(reg_out, target_lineal)
                 loss_ciclico = criterio(cyc_out, target_ciclico)
-                loss_total   = loss_class + loss_lineal + loss_ciclico
+                alpha = 2
+                loss_total   = loss_class + loss_lineal*alpha + loss_ciclico
                 val_loss += loss_total.item()
                 # Para métricas
                 pred_classes = logits.argmax(dim=1).cpu().numpy()
@@ -303,19 +346,17 @@ for epoch in range(start_epoch, epochs):
                 ious = IoU3D(pred_boxes, true_boxes).squeeze(0).detach().cpu().numpy()   # [N] o [batch]
                 ious = np.clip(ious, 0, 1)
                 all_iou3d.extend(ious.tolist())
-                if torch.isnan(pred_box).any() or torch.isinf(pred_box).any():
+                """if torch.isnan(pred_box).any() or torch.isinf(pred_box).any():
                     metrics_logger.info(f"IoU pred problematica:{pred_box}")
                     metrics_logger.info(f"IoU pred problematica-> {reg_out}")
-                    error_logger.info(f"contador = {contador}")
-                    error_logger.info(entrada)
-                    error_logger.info(salida)
-                    error_logger.exception(e)
+                    metrics_logger.info(f"contador = {contador}")
+                    metrics_logger.info(entrada)
+                    metrics_logger.info(salida)
                 if torch.isnan(true_box).any() or torch.isinf(true_box).any():
                     metrics_logger.info(f"IoU true problematica:{true_box}")
-                    error_logger.info(f"contador = {contador}")
-                    error_logger.info(entrada)
-                    error_logger.info(salida)
-                    error_logger.exception(e)
+                    metrics_logger.info(f"contador = {contador}")
+                    metrics_logger.info(entrada)
+                    metrics_logger.info(salida)"""
 
             except Exception as e:
                 #print(e)
